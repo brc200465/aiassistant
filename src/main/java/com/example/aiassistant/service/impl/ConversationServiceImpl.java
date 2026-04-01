@@ -20,38 +20,34 @@ public class ConversationServiceImpl implements ConversationService{
     @Autowired
     private ConversationMapper conversationMapper;
 
+    //开启新对话
     @Override
     public ConversationVO createConversation(Long userId,ConversationCreateDTO dto){
-     if(userId==null)
-            throw new BusinessException("请先登录");
+        Conversation conversation=new Conversation();
+        conversation.setUserId(userId);
 
-    Conversation conversation=new Conversation();
-    conversation.setUserId(userId);
-
-    String title=dto.getTitle();
-    if(title==null||title.trim().isEmpty()){
-        conversation.setTitle("新会话");
-    }else{
-        conversation.setTitle(title.trim());
-    }
-
-    conversation.setLastMessageTime(LocalDateTime.now());
-    
-    conversationMapper.insert(conversation);
-    ConversationVO vo=new ConversationVO();
-    BeanUtils.copyProperties(conversation,vo);
-    return vo;}
-
-    @Override
-    public List<ConversationVO>listConversations(Long userId){
-        if(userId==null){
-            throw new BusinessException("请先登录");
+        String title=dto.getTitle();
+        if(title==null||title.trim().isEmpty()){
+            conversation.setTitle("新会话");
+        }else{
+            conversation.setTitle(title);
         }
 
-        List<Conversation>conversationList=conversationMapper.findByUserId(userId);
+        conversation.setLastMessageTime(LocalDateTime.now());
+
+        conversationMapper.insert(conversation);
+        ConversationVO vo=new ConversationVO();
+        BeanUtils.copyProperties(conversation,vo);
+        return vo;
+    }
+
+    //获取会话列表
+    @Override
+    public List<ConversationVO>listConversations(Long userId){
+        List<Conversation>list=conversationMapper.findByUserId(userId);
         List<ConversationVO>result=new ArrayList<>();
 
-        for(Conversation conversation:conversationList){
+        for(Conversation conversation:list){
             ConversationVO vo=new ConversationVO();
             BeanUtils.copyProperties(conversation,vo);
             result.add(vo);
@@ -60,21 +56,19 @@ public class ConversationServiceImpl implements ConversationService{
         return result;
     }
 
+    //获取会话详情
     @Override
     public ConversationVO getConversationDetail(Long userId,Long conversationId){
-        if(userId==null)
-            throw new BusinessException("请先登录");
+        Conversation conversation=conversationMapper.findById(conversationId);
 
-    Conversation conversation=conversationMapper.findById(conversationId);
-    if(conversation==null)
-        throw new BusinessException("会话不存在");
+        if(conversation==null)
+            throw new BusinessException("会话不存在");
+        
+        if(conversation.getUserId()!=userId)
+            throw new BusinessException("无权访问该会话");
 
-    if(!conversation.getUserId().equals(userId)){
-        throw new BusinessException("无权访问该会话");
+        ConversationVO vo=new ConversationVO();
+        BeanUtils.copyProperties(conversation,vo);
+        return vo;
     }
-
-    ConversationVO vo=new ConversationVO();
-    BeanUtils.copyProperties(conversation,vo);
-    return vo;
-}
 }

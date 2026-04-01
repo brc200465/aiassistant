@@ -35,9 +35,7 @@ public class ConversationController {
     }
 
     @GetMapping("/{id}")
-    public Result<ConversationVO>getConversationDeatil(@PathVariable Long id,
-        HttpSession session
-    ){
+    public Result<ConversationVO>getConversationDetail(@PathVariable Long id,HttpSession session){
         Long userId=getLoginUserId(session);
         ConversationVO vo=conversationService.getConversationDetail(userId,id);
         return Result.success(vo);
@@ -45,9 +43,10 @@ public class ConversationController {
 
     private Long getLoginUserId(HttpSession session){
         Object value=session.getAttribute("loginUserId");
+
         if(value==null)
             throw new BusinessException("请先登录");
-    return (Long)value;
+        return (Long)value;
     }
 
 }

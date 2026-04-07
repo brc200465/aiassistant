@@ -64,7 +64,7 @@ public class ConversationServiceImpl implements ConversationService{
         if(conversation==null)
             throw new BusinessException("会话不存在");
         
-        if(conversation.getUserId()!=userId)
+        if(!conversation.getUserId().equals(userId))
             throw new BusinessException("无权访问该会话");
 
         ConversationVO vo=new ConversationVO();

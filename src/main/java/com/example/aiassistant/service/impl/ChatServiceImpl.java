@@ -1,5 +1,6 @@
 package com.example.aiassistant.service.impl;
 
+import com.example.aiassistant.dto.AiChatMessage;
 import com.example.aiassistant.dto.ChatSendDTO;
 import com.example.aiassistant.entity.Conversation;
 import com.example.aiassistant.entity.Message;
@@ -20,12 +21,12 @@ import java.util.ArrayList;
 
 @Service
 public class ChatServiceImpl implements ChatService{
-    
-    @Autowired
-    private ConversationMapper conversationMapper;
 
     @Autowired
     private MessageMapper messageMapper;
+
+    @Autowired
+    private ConversationMapper conversationMapper;
 
     @Autowired
     private AiService aiService;
@@ -40,7 +41,7 @@ public class ChatServiceImpl implements ChatService{
             throw new BusinessException("无权访问该会话");
 
         String content=dto.getContent().trim();
-        if(content.isEmpty())
+        if(content==null)
             throw new BusinessException("消息内容不能为空");
 
         Message userMessage=new Message();
@@ -50,7 +51,8 @@ public class ChatServiceImpl implements ChatService{
         userMessage.setTokenCount(null);
         messageMapper.insert(userMessage);
 
-        String reply=aiService.generateReply(content);
+        List<AiChatMessage>messages=List.of(new AiChatMessage("user",content));
+        String reply=aiService.generateReply(messages);
 
         Message assistantMessage=new Message();
         assistantMessage.setConversationId(dto.getConversationId());
@@ -77,14 +79,15 @@ public class ChatServiceImpl implements ChatService{
         if(!conversation.getUserId().equals(userId))
             throw new BusinessException("无权访问该会话");
 
-        List<Message>messagelist=messageMapper.findByConversationId(conversationId);
+        List<Message>list=messageMapper.findByConversationId(conversationId);
         List<MessageVO>result=new ArrayList<>();
 
-        for(Message message:messagelist){
+        for(Message message:list){
             MessageVO vo=new MessageVO();
             BeanUtils.copyProperties(message,vo);
             result.add(vo);
         }
+
         return result;
     }
 }

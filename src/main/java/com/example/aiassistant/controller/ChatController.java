@@ -18,22 +18,22 @@ public class ChatController {
     
     @Autowired
     private ChatService chatService;
-    
+
     @PostMapping("/chat")
     public Result<ChatResponseVO>chat(@Valid @RequestBody ChatSendDTO dto,
         HttpSession session
     ){
-        Long userId=(Long)getLoginUserId(session);
+        Long userId=getLoginUserId(session);
         ChatResponseVO vo=chatService.sendMessage(userId,dto);
         return Result.success(vo);
     }
 
-    @GetMapping("/conversations/{id}/messages")
-    public Result<List<MessageVO>>listMessages(@PathVariable Long id,
+    @GetMapping("/conversations/{conversationId}/messages")
+    public Result<List<MessageVO>>listMessages(@PathVariable Long conversationId,
         HttpSession session
     ){
         Long userId=getLoginUserId(session);
-        List<MessageVO>list=chatService.listMessages(userId,id);
+        List<MessageVO>list=chatService.listMessages(userId,conversationId);
         return Result.success(list);
     }
 

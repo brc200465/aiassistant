@@ -22,6 +22,8 @@ import java.util.ArrayList;
 @Service
 public class ChatServiceImpl implements ChatService{
 
+    private static final int CONTEXT_LIMIT=10;
+
     @Autowired
     private MessageMapper messageMapper;
 
@@ -51,8 +53,14 @@ public class ChatServiceImpl implements ChatService{
         userMessage.setTokenCount(null);
         messageMapper.insert(userMessage);
 
-        List<AiChatMessage>messages=List.of(new AiChatMessage("user",content));
-        String reply=aiService.generateReply(messages);
+        List<Message>recentMessages=messageMapper.findRecentMessages(dto.getConversationId(),CONTEXT_LIMIT);
+        
+        List<AiChatMessage>aiMessages=new ArrayList<>();
+        for(Message message:recentMessages){
+            aiMessages.add(new AiChatMessage(message.getRole(),message.getContent()));
+        }
+
+        String reply=aiService.generateReply(aiMessages);
 
         Message assistantMessage=new Message();
         assistantMessage.setConversationId(dto.getConversationId());

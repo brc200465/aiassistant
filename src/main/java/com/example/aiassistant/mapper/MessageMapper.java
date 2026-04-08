@@ -25,4 +25,16 @@ public interface MessageMapper {
                         order by id asc
                         """)
         List<Message>findByConversationId(Long conversationId);
+
+        @Select("""
+                        select id,conversation_id,role,content,token_count,create_time
+                        from(
+                        select id,conversation_id,role,content,token_count,create_time
+                        from message
+                        where conversation_id=#{conversationId}
+                        order by id desc
+                        limit #{limit}
+                        ) t order by t.id asc
+                        """)
+        List<Message>findRecentMessages(Long conversationId,Integer limit);
 }

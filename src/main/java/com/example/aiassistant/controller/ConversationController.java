@@ -1,5 +1,6 @@
 package com.example.aiassistant.controller;
 
+import com.example.aiassistant.common.ErrorCode;
 import com.example.aiassistant.common.Result;
 import com.example.aiassistant.dto.ConversationCreateDTO;
 import com.example.aiassistant.exception.BusinessException;
@@ -45,7 +46,7 @@ public class ConversationController {
         Object value=session.getAttribute("loginUserId");
 
         if(value==null)
-            throw new BusinessException("请先登录");
+            throw new BusinessException(ErrorCode.NOT_LOGIN,"请先登录");
         return (Long)value;
     }
 

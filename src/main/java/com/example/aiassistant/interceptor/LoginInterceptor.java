@@ -1,5 +1,6 @@
 package com.example.aiassistant.interceptor;
 
+import com.example.aiassistant.common.ErrorCode;
 import com.example.aiassistant.common.Result;
 import tools.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
@@ -26,7 +27,7 @@ public class LoginInterceptor implements HandlerInterceptor{
         }
 
         response.setContentType("application/json;charset=UTF-8");
-        response.getWriter().write(objectMapper.writeValueAsString(Result.error("请先登录")));
+        response.getWriter().write(objectMapper.writeValueAsString(Result.error(ErrorCode.NOT_LOGIN,"请先登录")));
         return false;
     }
 }

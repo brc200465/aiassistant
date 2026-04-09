@@ -1,5 +1,6 @@
 package com.example.aiassistant.controller;
 
+import com.example.aiassistant.common.ErrorCode;
 import com.example.aiassistant.common.Result;
 import com.example.aiassistant.dto.ChatSendDTO;
 import com.example.aiassistant.exception.BusinessException;
@@ -40,7 +41,7 @@ public class ChatController {
     private Long getLoginUserId(HttpSession session){
         Long value=(Long)session.getAttribute("loginUserId");
         if(value==null)
-            throw new BusinessException("请先登录");
+            throw new BusinessException(ErrorCode.NOT_LOGIN,"请先登录");
         return value;
     }
 }

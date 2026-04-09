@@ -1,5 +1,6 @@
 package com.example.aiassistant.service.impl;
 
+import com.example.aiassistant.common.ErrorCode;
 import com.example.aiassistant.config.AiProperties;
 import com.example.aiassistant.dto.AiChatMessage;
 import com.example.aiassistant.exception.BusinessException;
@@ -21,7 +22,7 @@ import java.util.Map;
 
 @Service
 public class AiServiceImpl implements AiService{
-    
+
     @Autowired
     private AiProperties aiProperties;
 
@@ -34,28 +35,26 @@ public class AiServiceImpl implements AiService{
     @Override
     public String generateReply(List<AiChatMessage>messages){
         if(messages==null||messages.isEmpty()){
-            throw new BusinessException("消息列表不能为空");
+            throw new BusinessException(ErrorCode.PARAM_ERROR,"消息列表不能为空");
         }
 
         AiChatMessage lastUserMessage=findLastUserMessage(messages);
         String fallBackContent=lastUserMessage==null?"":lastUserMessage.getContent();
 
-
         if(!aiProperties.isEnabled()){
-            return "这是AI的模拟回复：你刚才问的是 ->"+fallBackContent;
+            return "这是AI的模拟回复：你刚才问的是->"+fallBackContent;
         }
 
-        //配置校验
         if(isBlank(aiProperties.getBaseUrl())){
-            throw new BusinessException("AI baseUrl 未配置");
+            throw new BusinessException(ErrorCode.AI_CALL_ERROR,"AI baseUrl未配置");        
         }
 
         if(isBlank(aiProperties.getApiKey())){
-            throw new BusinessException("AI apiKey 未配置");
+            throw new BusinessException(ErrorCode.AI_CALL_ERROR,"AI apiKey未配置");
         }
 
         if(isBlank(aiProperties.getModel())){
-            throw new BusinessException("AI model 未配置");
+            throw new BusinessException(ErrorCode.AI_CALL_ERROR,"AI model未配置");
         }
 
         try{
@@ -81,18 +80,18 @@ public class AiServiceImpl implements AiService{
 
             HttpResponse<String>response=httpClient.send(request,HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             if(response.statusCode()<200||response.statusCode()>=300){
-                throw new BusinessException("AI接口调用失败，HTTP状态码："+response.statusCode()+"，响应："+response.body());
+                throw new BusinessException(ErrorCode.AI_CALL_ERROR,"Ai接口调用失败，HTTP状态码："+response.statusCode());
             }
 
             JsonNode root=objectMapper.readTree(response.body());
             JsonNode choices=root.path("choices");
 
             if(!choices.isArray()||choices.isEmpty()){
-                throw new BusinessException("AI接口返回异常：choices为空");
+                throw new BusinessException(ErrorCode.AI_CALL_ERROR,"AI接口返回异常：choices为空");
             }
 
-            JsonNode firstChoice=choices.get(0);
-            JsonNode messageNode=firstChoice.path("message");
+            JsonNode firstChoices=choices.get(0);
+            JsonNode messageNode=firstChoices.path("message");
             JsonNode contentNode=messageNode.path("content");
 
             String reply;
@@ -100,20 +99,21 @@ public class AiServiceImpl implements AiService{
             if(contentNode.isString()){
                 reply=contentNode.asString();
             }
+
             else if(contentNode.isArray()){
                 StringBuilder sb=new StringBuilder();
                 for(JsonNode part:contentNode){
                     if("text".equals(part.path("type").asString())){
-                        sb.append(part.path("text").asString(""));
+                        sb.append(part.path("text").asString());
                     }
                 }
-
+                
                 reply=sb.toString();
             }else{
                 reply="";
             }
             if(isBlank(reply)){
-                throw new BusinessException("AI接口返回异常：回复内容为空");
+                throw new BusinessException(ErrorCode.AI_CALL_ERROR,"Ai接口返回异常：回复内容为空");
             }
 
             return reply.trim();
@@ -121,7 +121,7 @@ public class AiServiceImpl implements AiService{
             throw e;
         }catch(Exception e){
             e.printStackTrace();
-            throw new BusinessException("调用AI服务失败："+e.getMessage());
+            throw new BusinessException(ErrorCode.AI_CALL_ERROR,"Ai调用服务失败："+e.getMessage());
         }
     }
 

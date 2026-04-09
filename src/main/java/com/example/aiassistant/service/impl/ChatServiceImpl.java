@@ -1,5 +1,7 @@
 package com.example.aiassistant.service.impl;
 
+import com.example.aiassistant.common.ErrorCode;
+import com.example.aiassistant.constant.RedisKeyConstants;
 import com.example.aiassistant.dto.AiChatMessage;
 import com.example.aiassistant.dto.ChatSendDTO;
 import com.example.aiassistant.entity.Conversation;
@@ -13,6 +15,7 @@ import com.example.aiassistant.vo.ChatResponseVO;
 import com.example.aiassistant.vo.MessageVO;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 
@@ -33,18 +36,21 @@ public class ChatServiceImpl implements ChatService{
     @Autowired
     private AiService aiService;
 
+    @Autowired
+    private StringRedisTemplate stringRedisTemplate;
+
     @Override
     public ChatResponseVO sendMessage(Long userId,ChatSendDTO dto){
         Conversation conversation=conversationMapper.findById(dto.getConversationId());
         if(conversation==null)
-            throw new BusinessException("会话不存在");
+            throw new BusinessException(ErrorCode.NOT_FOUND,"会话不存在");
 
         if(!conversation.getUserId().equals(userId))
-            throw new BusinessException("无权访问该会话");
+            throw new BusinessException(ErrorCode.NO_PERMISSION,"无权访问该会话");
 
         String content=dto.getContent().trim();
         if(content==null)
-            throw new BusinessException("消息内容不能为空");
+            throw new BusinessException(ErrorCode.PARAM_ERROR,"消息内容不能为空");
 
         Message userMessage=new Message();
         userMessage.setConversationId(dto.getConversationId());
@@ -71,6 +77,8 @@ public class ChatServiceImpl implements ChatService{
 
         conversationMapper.updateLastMessageTime(dto.getConversationId());
 
+        deleteConversationListCache(userId);
+
         ChatResponseVO vo=new ChatResponseVO();
         vo.setConversationId(dto.getConversationId());
         vo.setUserMessage(content);
@@ -82,10 +90,10 @@ public class ChatServiceImpl implements ChatService{
     public List<MessageVO>listMessages(Long userId,Long conversationId){
         Conversation conversation=conversationMapper.findById(conversationId);
         if(conversation==null)
-            throw new BusinessException("会话不存在");
+            throw new BusinessException(ErrorCode.NOT_FOUND,"会话不存在");
 
         if(!conversation.getUserId().equals(userId))
-            throw new BusinessException("无权访问该会话");
+            throw new BusinessException(ErrorCode.NO_PERMISSION,"无权访问该会话");
 
         List<Message>list=messageMapper.findByConversationId(conversationId);
         List<MessageVO>result=new ArrayList<>();
@@ -97,5 +105,9 @@ public class ChatServiceImpl implements ChatService{
         }
 
         return result;
+    }
+
+    private void deleteConversationListCache(Long userId){
+        stringRedisTemplate.delete(RedisKeyConstants.CONVERSATION_LIST_KEY_PREFIX+userId);
     }
 }

@@ -1,5 +1,6 @@
 package com.example.aiassistant.controller;
 
+import com.example.aiassistant.common.ErrorCode;
 import com.example.aiassistant.common.Result;
 import com.example.aiassistant.dto.LoginDTO;
 import com.example.aiassistant.dto.RegisterDTO;
@@ -40,7 +41,7 @@ public class UserController {
     public Result<UserVO>me(HttpSession session){
         Long userId=(Long)session.getAttribute("loginUserId");
         if(userId==null)
-            throw new BusinessException("请先登录");
+            throw new BusinessException(ErrorCode.NOT_LOGIN,"请先登录");
 
         UserVO userVO=userService.getCurrentUser(userId);
         return Result.success(userVO);

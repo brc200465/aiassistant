@@ -1,7 +1,14 @@
 package com.example.aiassistant.exception;
 
+import lombok.Getter;
+
+@Getter
 public class BusinessException extends RuntimeException{
-    public BusinessException(String message){
+    
+    private final Integer code;
+
+    public BusinessException(Integer code,String message){
         super(message);
+        this.code=code;
     }
 }

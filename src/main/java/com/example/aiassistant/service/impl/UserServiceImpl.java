@@ -1,5 +1,6 @@
 package com.example.aiassistant.service.impl;
 
+import com.example.aiassistant.common.ErrorCode;
 import com.example.aiassistant.dto.LoginDTO;
 import com.example.aiassistant.dto.RegisterDTO;
 import com.example.aiassistant.entity.User;
@@ -30,7 +31,7 @@ public class UserServiceImpl implements UserService{
 
         User existUser=userMapper.findByUsername(username);
         if(existUser!=null)
-            throw new BusinessException("用户名已存在");
+            throw new BusinessException(ErrorCode.PARAM_ERROR,"用户名已存在");
 
         User user=new User();
         user.setUsername(username);
@@ -42,14 +43,14 @@ public class UserServiceImpl implements UserService{
 
     public UserVO login(LoginDTO loginDTO,HttpSession session){
         String username=loginDTO.getUsername().trim();
-        String password=loginDTO.getPassword();
+        String password=loginDTO.getPassword().trim();
         
         User user=userMapper.findByUsername(username);
         if(user==null)
-            throw new BusinessException("用户名或密码错误");
+            throw new BusinessException(ErrorCode.PARAM_ERROR,"用户名或密码错误");
 
         if(!passwordEncoder.matches(password,user.getPassword())){
-            throw new BusinessException("用户名或密码错误");
+            throw new BusinessException(ErrorCode.PARAM_ERROR,"用户名或密码错误");
         }
         session.setAttribute("loginUserId",user.getId());
 
@@ -68,7 +69,7 @@ public class UserServiceImpl implements UserService{
 
         User user=userMapper.findById(userId);
         if(user==null)
-            throw new BusinessException("用户不存在");
+            throw new BusinessException(ErrorCode.NOT_FOUND,"用户不存在");
 
         UserVO userVO=new UserVO();
         BeanUtils.copyProperties(user,userVO);

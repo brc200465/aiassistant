@@ -43,7 +43,7 @@ public class UserServiceImpl implements UserService{
 
     public UserVO login(LoginDTO loginDTO,HttpSession session){
         String username=loginDTO.getUsername().trim();
-        String password=loginDTO.getPassword().trim();
+        String password=loginDTO.getPassword();
         
         User user=userMapper.findByUsername(username);
         if(user==null)

@@ -1,553 +1,467 @@
-# AI学习助手后端
+# AI 学习助手后端
 
-基于 **Spring Boot + MyBatis + MySQL + Redis + DeepSeek API** 实现的 AI 学习助手后端。  
-当前版本已完成用户注册登录、会话管理、消息存储、真实 AI 问答、多轮上下文对话、会话列表缓存等核心能力。
+基于 Java 21、Spring Boot、MyBatis、MySQL、Redis 和 DeepSeek API 实现的学习问答后端。
 
----
+支持用户注册登录、会话管理、多轮 AI 问答、历史消息查询，以及请求幂等、失败重试、会话并发控制和过期任务恢复。
 
-## 1. 项目简介
+## 1. 技术栈
 
-本项目是一个面向学习场景的后端系统，目标不是简单调用一次大模型接口，而是将 **用户系统、登录鉴权、会话管理、消息存储、上下文问答、缓存优化** 串成一条完整的后端业务链。
+| 技术 | 用途 |
+|---|---|
+| Java 21 | 开发语言 |
+| Spring Boot 4.0.5 | Web 应用与依赖管理 |
+| MyBatis Starter 4.0.0 | 数据库访问 |
+| MySQL 8.x / InnoDB | 消息、会话与请求状态持久化 |
+| Redis | 用户会话列表缓存 |
+| BCrypt | 密码哈希 |
+| Java HttpClient | 调用 DeepSeek API |
+| Maven | 项目构建 |
 
-和传统后台 CRUD 项目相比，本项目的核心业务不再是单表增删改查，而是围绕以下场景展开：
+## 2. 已实现功能
 
-- 用户登录后进入自己的学习会话空间
-- 用户可以创建多个学习会话
-- 在会话中发送消息并获得 AI 回复
-- 用户消息和 AI 消息分别落库
-- 基于最近若干条历史消息构建上下文，实现多轮对话
-- 使用 Redis 缓存当前用户的会话列表
+### 用户与鉴权
 
----
+- 用户注册、登录、退出及当前用户查询。
+- BCrypt 密码哈希与校验。
+- HttpSession 保存登录状态。
+- 登录拦截器保护业务接口。
+- 校验会话归属，防止访问其他用户的会话。
 
-## 2. 项目功能
+### 会话与消息
 
-### 2.1 用户模块
-- 用户注册
-- 用户登录
-- 获取当前登录用户
-- 退出登录
+- 创建会话、查询会话列表和详情。
+- 分别保存用户问题与 AI 回复。
+- 查询消息时，通过单条关联 SQL 同时读取消息与请求状态。
+- 按首次提问顺序展示，每条回复紧跟对应问题。
 
-### 2.2 登录鉴权
-- 基于 **Session** 保存登录状态
-- 基于 **登录拦截器** 统一保护需要登录的接口
-- 未登录统一返回 JSON 错误结果
+### AI 问答
 
-### 2.3 会话模块
-- 创建学习会话
-- 查询当前用户的会话列表
-- 查询某个会话详情
-- 会话归属校验，防止越权访问
+- 接入 DeepSeek 的 Chat Completions 接口。
+- 可通过配置切换真实 AI 和模拟回复。
+- 上下文使用当前问题之前最近 4 轮完整成功问答，再追加当前问题，最多 9 条消息。
+- 根据请求关联的消息 ID 配对问题与回复，避免按消息条数截取时拆散问答。
 
-### 2.4 消息模块
-- 发送消息
-- 保存 `role=user` 的用户消息
-- 保存 `role=assistant` 的 AI 回复消息
-- 查询会话历史消息
+### 请求状态与重试
 
-### 2.5 AI 问答
-- 接入 **DeepSeek API**
-- 支持真实问答能力
-- 支持多轮上下文对话
-- 当前采用“最近若干条消息”作为上下文
+- 使用 requestId 标识一次逻辑提问。
+- 同一次提问重试复用原 ID，不重复保存用户问题。
+- 成功请求重复提交，直接返回已保存的回复。
+- AI 失败后保留问题，并记录失败状态和提示。
+- attempt 区分生成尝试，防止旧调用覆盖新一次重试。
+- leaseUntil 表示本次尝试的处理期限，支持过期接管。
 
-### 2.6 Redis 缓存
-- 缓存当前用户的会话列表
-- 创建会话后删除缓存
-- 发送消息后删除缓存
-- 缓存失败时降级走数据库，不影响主流程
+### 同一会话并发控制
 
-### 2.7 工程化能力
-- DTO 参数校验
-- 统一返回结果
-- 统一错误码
-- 全局异常处理
+- 同一会话最多允许一个有效生成任务。
+- 存在其他未过期任务时，新提问返回会话忙碌错误，不保存新问题。
+- 其他任务已过期时，先将其标记为失败，再允许新任务进入。
+- 数据库锁仅覆盖短事务，不在等待 AI 时持续持有。
 
----
+### 缓存与接口基础
 
-## 3. 技术栈
+- Redis 缓存用户会话列表，TTL 为 10 分钟。
+- 会话列表缓存读取、写入失败时，仍返回数据库查询结果。
+- 聊天成功后删除会话列表缓存；删除失败只记录日志。
+- DTO 参数校验、统一响应和全局异常处理。
 
-- **Java**
-- **Spring Boot**
-- **MyBatis**
-- **MySQL**
-- **Redis**
-- **DeepSeek API**
-- **Maven**
-- **Git**
+注意：创建会话后的缓存删除目前仍未捕获 Redis 异常，详见“已知限制”。
 
----
+## 3. 核心流程
 
-## 4. 项目亮点
+### 注册登录
 
-### 4.1 AI 对话型后端，而不是普通 CRUD
-本项目围绕 **conversation + message** 进行建模，将 AI 问答场景真正落成后端系统。
+1. 校验注册参数与用户名。
+2. 使用 BCrypt 处理密码后写入数据库。
+3. 登录时校验用户名和密码。
+4. 将 loginUserId 保存到 Session。
+5. 后续请求携带 Session Cookie 访问业务接口。
 
-### 4.2 一轮问答拆成两条消息
-一次问答拆成：
-- `role=user`
-- `role=assistant`
+### 发送消息
 
-这样更适合：
-- 历史消息展示
-- 多轮上下文拼接
-- 后续扩展更多角色消息
+```text
+POST /chat
+    ↓
+begin()：短事务
+    ├─ 校验参数和会话归属
+    ├─ 检查相同请求的状态
+    ├─ 检查会话是否被其他有效任务占用
+    └─ 保存问题和PROCESSING记录，或取得重试资格
+    ↓ 提交事务
+组装完整问答上下文
+    ↓
+调用AI，不持有数据库事务
+    ├─ 成功 → complete()短事务
+    │          保存回复、更新SUCCESS、更新会话时间
+    └─ 失败 → fail()短事务
+               保留问题、记录FAILED和失败原因
+```
 
-### 4.3 支持多轮上下文对话
-发送消息时，不是只把当前一句发给模型，而是会查询当前会话最近若干条历史消息，一起发给 DeepSeek，提升回复连贯性。
+如果保存回复失败，成功事务回滚后，再尝试记录失败状态。若数据库不可用，失败状态也可能无法立即写入，此时返回结果暂无法确认的提示，后续使用原请求 ID 恢复。
 
-### 4.4 主业务链和 AI 调用解耦
-通过 `AiService` 抽象 AI 调用层，便于：
-- mock 到真实 AI 的平滑切换
-- 更换模型
-- 后续扩展 system prompt / 学习模式
+### 请求状态规则
 
-### 4.5 具备基础工程化能力
-项目已补充：
-- DTO 参数校验
-- 统一错误码
-- 全局异常处理
-- Redis 缓存
-- 登录拦截器
+| 情况 | 处理方式 |
+|---|---|
+| 新请求 | 保存用户问题，状态设为 PROCESSING，attempt=1 |
+| 同请求正在处理且未过期 | 返回 PROCESSING，不再次调用 AI |
+| 同请求已成功 | 返回原回复 |
+| 同请求失败后重试 | 复用问题，attempt 加一，重新生成 |
+| 同请求处理过期后重试 | 更新 attempt 和处理期限，接管任务 |
+| 其他请求正在处理且未过期 | 返回 4006，不创建新问题 |
+| 其他请求已过期 | 将旧请求标记为 FAILED，再接收新任务 |
 
----
+处理期限按“AI 请求超时时间 + 60 秒余量”计算。当前默认 AI 超时为 30 秒，因此处理期限约为设置时刻之后 90 秒。
 
-## 5. 核心业务流程
+过期恢复由后续请求触发，没有定时扫描。期限过期不会自动取消远端 AI 调用；状态和 attempt 校验负责阻止已经失去资格的旧调用写入结果。
 
-### 5.1 注册登录流程
-1. 用户提交注册信息
-2. 后端校验用户名是否已存在
-3. 使用 BCrypt 对密码加密
-4. 用户信息写入数据库
-5. 登录时根据用户名查询用户
-6. 使用 BCrypt 校验密码
-7. 登录成功后将 `loginUserId` 写入 Session
+## 4. 数据模型
 
-### 5.2 发送消息流程
-1. 获取当前登录用户 id
-2. 根据 `conversationId` 查询会话
-3. 校验会话是否存在
-4. 校验会话是否属于当前登录用户
-5. 保存当前用户消息（`role=user`）
-6. 查询该会话最近若干条历史消息
-7. 组装成 `AiChatMessage` 列表
-8. 调用 DeepSeek API 生成回复
-9. 保存 AI 回复消息（`role=assistant`）
-10. 更新会话 `lastMessageTime`
-11. 删除当前用户会话列表缓存
-12. 返回本轮问答结果
+| 表 | 作用 |
+|---|---|
+| user | 用户账号及密码哈希 |
+| conversation | 用户的学习会话 |
+| message | 用户问题、AI 回复 |
+| chat_request | 一次提问的幂等标识、消息关联及处理状态 |
 
----
+chat_request 的主要字段：
 
-## 6. 数据模型设计
+| 字段 | 含义 |
+|---|---|
+| conversation_id | 所属会话 |
+| request_id | 同一次提问重试时复用的标识 |
+| user_message_id | 用户问题消息 ID |
+| assistant_message_id | AI 回复消息 ID，未成功时为空 |
+| status | PROCESSING、SUCCESS、FAILED |
+| error_message | 可展示的失败原因 |
+| attempt | 生成尝试次数，首次为 1 |
+| lease_until | 本次处理期限 |
+| create_time / update_time | 创建与更新时间 |
 
-### 6.1 user
-表示系统用户。
+唯一约束 `(conversation_id, request_id)` 防止重复创建同一请求。
 
-核心字段：
-- `id`
-- `username`
-- `password`
-- `nickname`
-- `create_time`
-- `update_time`
+用户问题和请求记录在同一事务中创建；AI 回复、成功状态及会话时间在另一个事务中提交。
 
-### 6.2 conversation
-表示一个学习会话。
+## 5. 数据库初始化
 
-核心字段：
-- `id`
-- `user_id`
-- `title`
-- `last_message_time`
-- `create_time`
-- `update_time`
+创建数据库：
 
-### 6.3 message
-表示会话中的一条消息。
+```sql
+CREATE DATABASE ai_learn_system DEFAULT CHARACTER SET utf8mb4;
 
-核心字段：
-- `id`
-- `conversation_id`
-- `role`
-- `content`
-- `token_count`
-- `create_time`
+USE ai_learn_system;
+```
 
-### 6.4 表关系
-- 一个用户可以拥有多个会话
-- 一个会话可以拥有多条消息
-
----
-
-## 7. 数据库建表 SQL
-
-> 下面是一个可直接参考的建表版本，你可以按自己的数据库名执行。
+全新数据库先创建基础表：
 
 ```sql
 CREATE TABLE `user` (
-  `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
-  `username` VARCHAR(20) NOT NULL COMMENT '用户名',
-  `password` VARCHAR(100) NOT NULL COMMENT '加密密码',
-  `nickname` VARCHAR(20) DEFAULT NULL COMMENT '昵称',
-  `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_username` (`username`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户表';
+    id BIGINT NOT NULL AUTO_INCREMENT,
+    username VARCHAR(20) NOT NULL,
+    password VARCHAR(100) NOT NULL,
+    nickname VARCHAR(20) DEFAULT NULL,
+    create_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_username (username)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE TABLE conversation (
+    id BIGINT NOT NULL AUTO_INCREMENT,
+    user_id BIGINT NOT NULL,
+    title VARCHAR(100) NOT NULL,
+    last_message_time DATETIME NOT NULL,
+    create_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    KEY idx_user_id (user_id),
+    KEY idx_last_message_time (last_message_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-CREATE TABLE `conversation` (
-  `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
-  `user_id` BIGINT NOT NULL COMMENT '所属用户ID',
-  `title` VARCHAR(100) NOT NULL COMMENT '会话标题',
-  `last_message_time` DATETIME NOT NULL COMMENT '最后消息时间',
-  `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  PRIMARY KEY (`id`),
-  KEY `idx_user_id` (`user_id`),
-  KEY `idx_last_message_time` (`last_message_time`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='会话表';
-
-
-CREATE TABLE `message` (
-  `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
-  `conversation_id` BIGINT NOT NULL COMMENT '所属会话ID',
-  `role` VARCHAR(20) NOT NULL COMMENT '消息角色：user/assistant',
-  `content` TEXT NOT NULL COMMENT '消息内容',
-  `token_count` INT DEFAULT NULL COMMENT 'token数量（当前版本可为空）',
-  `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  PRIMARY KEY (`id`),
-  KEY `idx_conversation_id` (`conversation_id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='消息表';
+CREATE TABLE message (
+    id BIGINT NOT NULL AUTO_INCREMENT,
+    conversation_id BIGINT NOT NULL,
+    role VARCHAR(20) NOT NULL,
+    content TEXT NOT NULL,
+    token_count INT DEFAULT NULL,
+    create_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    KEY idx_conversation_id (conversation_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 ```
 
----
+然后手动执行：
 
-## 8. 项目结构
+[src/main/resources/db/migration/V2__chat_request.sql](src/main/resources/db/migration/V2__chat_request.sql)
+
+已有基础表的环境只需补建 chat_request；已经创建过的表不要重复执行建表语句。
+
+当前未集成自动数据库迁移工具，文件放在 `db/migration` 下不代表启动时会自动执行。
+
+旧消息不会自动生成请求关联记录：它们仍可展示，但不参与新版 AI 上下文，也不支持通过原请求 ID 重试。
+
+## 6. 项目结构
+
+Java 包路径：
 
 ```text
-src/main/java/com/brc/aiassistant
-├── AiAssistantApplication.java
-├── common
-│   ├── ErrorCode.java
-│   └── Result.java
-├── config
-│   ├── AiConfig.java
-│   ├── AiProperties.java
-│   ├── PasswordConfig.java
-│   └── WebMvcConfig.java
-├── constant
-│   └── RedisKeyConstants.java
-├── controller
-│   ├── ChatController.java
-│   ├── ConversationController.java
-│   └── UserController.java
-├── dto
-│   ├── AiChatMessage.java
-│   ├── ChatSendDTO.java
-│   ├── ConversationCreateDTO.java
-│   ├── LoginDTO.java
-│   └── RegisterDTO.java
-├── entity
-│   ├── Conversation.java
-│   ├── Message.java
-│   └── User.java
-├── exception
-│   ├── BusinessException.java
-│   └── GlobalExceptionHandler.java
-├── interceptor
-│   └── LoginInterceptor.java
-├── mapper
-│   ├── ConversationMapper.java
-│   ├── MessageMapper.java
-│   └── UserMapper.java
-├── service
-│   ├── AiService.java
-│   ├── ChatService.java
-│   ├── ConversationService.java
-│   ├── UserService.java
-│   └── impl
-│       ├── AiServiceImpl.java
-│       ├── ChatServiceImpl.java
-│       ├── ConversationServiceImpl.java
-│       └── UserServiceImpl.java
-└── vo
-    ├── ChatResponseVO.java
-    ├── ConversationVO.java
-    ├── MessageVO.java
-    └── UserVO.java
+src/main/java/com/example/aiassistant
+├── AiassistantApplication.java
+├── common          # 统一响应、错误码
+├── config          # AI配置、密码配置、MVC配置
+├── constant        # Redis键前缀
+├── controller      # 用户、会话、聊天接口
+├── dto             # 请求参数、AI消息、完整问答、生成资格结果
+├── entity          # User、Conversation、Message、ChatRequest
+├── exception       # 业务异常、全局异常处理
+├── interceptor     # 登录拦截器
+├── mapper          # MyBatis注解SQL
+├── service         # 业务接口
+│   └── impl        # 业务实现
+└── vo              # 返回给客户端的数据
 ```
 
----
+关键类：
 
-## 9. 环境要求
+- `ChatServiceImpl`：协调发送流程、组装上下文、查询历史。
+- `ChatRequestServiceImpl`：管理请求状态、事务、并发和过期接管。
+- `AiServiceImpl`：构造 HTTP 请求、调用 AI 并解析回复。
+- `MessageMapper`：历史关联查询和完整成功问答查询。
+- `AiChatTurn`：一轮完整的问题与回复。
 
-- JDK 17 或以上
-- Maven 3.9+
-- MySQL 8.x
-- Redis 6.x / 7.x
+## 7. 环境与启动
 
----
+需要 JDK 21、Maven、MySQL 8.x 和 Redis。
 
-## 10. 配置说明
+克隆项目并进入包含 pom.xml 的目录：
 
-### 10.1 application.properties 示例
+```bash
+git clone https://github.com/brc200465/aiassistant.git
+cd aiassistant
+```
+
+完成数据库初始化，并启动 Redis。
+
+配置环境变量：
+
+| 环境变量 | 用途 |
+|---|---|
+| DB_USERNAME | 数据库用户名 |
+| DB_PASSWORD | 数据库密码 |
+| DEEPSEEK_API_KEY | DeepSeek API Key |
+
+环境变量需要对启动 Java 的终端或 IDE 运行配置可见。
+
+当前主要配置：
 
 ```properties
-spring.application.name=ai-assistant
+spring.application.name=aiassistant
 server.port=8080
 
-# MySQL
-spring.datasource.url=jdbc:mysql://localhost:3306/ai_assistant?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=UTF-8
-spring.datasource.username=root
-spring.datasource.password=你的数据库密码
+spring.datasource.url=jdbc:mysql://localhost:3306/ai_learn_system?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=UTF-8
+spring.datasource.username=${DB_USERNAME}
+spring.datasource.password=${DB_PASSWORD}
 spring.datasource.driver-class-name=com.mysql.cj.jdbc.Driver
 
-# MyBatis
 mybatis.configuration.map-underscore-to-camel-case=true
-mybatis.type-aliases-package=com.brc.aiassistant.entity
-logging.level.com.brc.aiassistant.mapper=debug
+mybatis.type-aliases-package=com.example.aiassistant.entity
 
-# Redis
 spring.data.redis.host=localhost
 spring.data.redis.port=6379
 spring.data.redis.database=0
+spring.data.redis.timeout=5s
 
-# AI（当前接入 DeepSeek）
 ai.openai.enabled=true
-ai.openai.base-url=https://api.deepseek.com
+ai.openai.base-url=https://api.deepseek.com/v1
 ai.openai.api-key=${DEEPSEEK_API_KEY:}
 ai.openai.model=deepseek-chat
 ai.openai.timeout-millis=30000
 ```
 
-> 说明：
-> - 当前配置类前缀仍然使用 `ai.openai.*`，但实际已经接入 **DeepSeek API**
-> - `ai.openai.api-key=${DEEPSEEK_API_KEY:}` 表示优先从环境变量读取 API Key
-> - 如果暂时不想走真实 AI，可将 `ai.openai.enabled=false`
+虽然配置前缀为 `ai.openai`，当前实际调用 DeepSeek。
 
----
+设置 `ai.openai.enabled=false` 可使用模拟回复，但数据库等业务依赖仍需正常配置。
 
-## 11. 启动步骤
+启动：
 
-### 11.1 克隆项目
-```bash
-git clone 你的仓库地址
-cd 项目目录
-```
-
-### 11.2 创建数据库并执行建表 SQL
-在 MySQL 中创建数据库：
-
-```sql
-CREATE DATABASE ai_assistant DEFAULT CHARACTER SET utf8mb4;
-```
-
-然后执行 README 中的建表 SQL。
-
-### 11.3 启动 Redis
-确保本地 Redis 服务已启动。
-
-### 11.4 配置 DeepSeek API Key
-在系统环境变量中配置：
-
-```bash
-DEEPSEEK_API_KEY=你的DeepSeekAPIKey
-```
-
-### 11.5 修改 application.properties
-把数据库用户名、密码改成你本机的配置。
-
-### 11.6 启动项目
 ```bash
 mvn spring-boot:run
 ```
 
-或在 IDE 中直接运行启动类：
+或在 IDE 中运行：
 
-```java
-AiAssistantApplication
+```text
+com.example.aiassistant.AiassistantApplication
 ```
 
----
+## 8. 接口
 
-## 12. 接口说明
+除注册和登录外，业务接口需要携带登录后的 Session Cookie。
 
-统一返回结构：
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| POST | /users/register | 注册 |
+| POST | /users/login | 登录 |
+| GET | /users/me | 当前用户 |
+| POST | /users/logout | 退出 |
+| POST | /conversations | 创建会话 |
+| GET | /conversations | 会话列表 |
+| GET | /conversations/{id} | 会话详情 |
+| POST | /chat | 提问或重试 |
+| GET | /conversations/{conversationId}/messages | 历史消息 |
+
+注册示例：
 
 ```json
 {
-  "code": 1,
-  "message": "success",
-  "data": {}
+  "username": "student",
+  "password": "example123",
+  "nickname": "学习者"
 }
 ```
 
-失败时示例：
+登录示例：
 
 ```json
 {
-  "code": 4002,
-  "message": "请先登录",
-  "data": null
+  "username": "student",
+  "password": "example123"
 }
 ```
 
----
+创建会话：
 
-### 12.1 用户模块
-
-#### 1）注册
-**POST** `/users/register`
-
-请求体：
 ```json
 {
-  "username": "ssh",
-  "password": "123456",
-  "nickname": "sunshine"
+  "title": "Java基础"
 }
 ```
 
-#### 2）登录
-**POST** `/users/login`
+### 发送消息
 
-请求体：
 ```json
 {
-  "username": "ssh",
-  "password": "123456"
-}
-```
-
-#### 3）获取当前登录用户
-**GET** `/users/me`
-
-#### 4）退出登录
-**POST** `/users/logout`
-
----
-
-### 12.2 会话模块
-
-#### 1）创建会话
-**POST** `/conversations`
-
-请求体：
-```json
-{
-  "title": "Java集合"
-}
-```
-
-#### 2）查询当前用户会话列表
-**GET** `/conversations`
-
-#### 3）查询会话详情
-**GET** `/conversations/{id}`
-
----
-
-### 12.3 消息模块
-
-#### 1）发送消息
-**POST** `/chat`
-
-请求体：
-```json
-{
+  "requestId": "test-001",
   "conversationId": 1,
-  "content": "请解释一下 ArrayList 和 LinkedList 的区别"
+  "content": "什么是多态？"
 }
 ```
 
-返回示例：
+requestId 为不超过 64 个字符的非空字符串：
+
+- 新提问生成新 ID，例如 UUID。
+- 同一次提问的重试复用原 ID。
+- 同一 ID 不能更换问题内容。
+- 手工测试可使用 test-001、test-002 等标识。
+- 创建会话接口不受这个幂等键保护。
+
+成功响应示例，消息 ID 仅作示意：
+
 ```json
 {
   "code": 1,
   "message": "success",
   "data": {
     "conversationId": 1,
-    "userMessage": "请解释一下 ArrayList 和 LinkedList 的区别",
-    "assistantMessage": "......"
+    "userMessage": "什么是多态？",
+    "assistantMessage": "多态是……",
+    "requestId": "test-001",
+    "status": "SUCCESS",
+    "errorMessage": null,
+    "userMessageId": 10,
+    "assistantMessageId": 11
   }
 }
 ```
 
-#### 2）查询会话历史消息
-**GET** `/conversations/{id}/messages`
+前端必须检查 `data.status`：
 
----
+| 状态 | 含义 |
+|---|---|
+| PROCESSING | 原请求仍在处理中，当前没有最终回复 |
+| SUCCESS | 回复已保存 |
+| FAILED | 处理失败，用户问题保留，可复用原 ID 重试 |
 
-## 13. 错误码说明
+外层 `code=1` 表示接口正常返回业务结果，不一定表示 AI 已生成成功。记录失败状态成功时，也会返回 `code=1`、`data.status=FAILED`。
+
+不同请求遇到会话忙碌时：
+
+```json
+{
+  "code": 4006,
+  "message": "当前会话正在生成回复，请稍后再发送",
+  "data": null
+}
+```
+
+### 历史消息
+
+每条消息包含：
+
+- id、role、content、createTime。
+- requestId、status、errorMessage。
+
+消息按首次提问顺序组织，回复紧跟问题。前端应保留接口顺序，不要再次按消息 ID 或创建时间排序。
+
+没有请求关联的旧消息，其请求状态字段为 null。
+
+## 9. 错误码
 
 | 错误码 | 含义 |
 |---|---|
-| 1 | 成功 |
+| 1 | 正常返回 |
 | 4001 | 参数错误 |
 | 4002 | 未登录 |
 | 4003 | 无权限 |
 | 4004 | 资源不存在 |
 | 4005 | 数据冲突 |
-| 5001 | AI 调用失败 |
-| 5000 | 系统异常 |
+| 4006 | 会话忙碌 |
+| 5001 | AI 调用错误 |
+| 5002 | 系统异常 |
 
----
+聊天流程中的 AI 异常通常会转为 FAILED 请求状态。若失败状态也无法保存，则返回系统异常。
 
-## 14. 当前已完成能力
+当前多数错误通过响应体表达，HTTP 状态通常仍为 200，客户端不能只检查 HTTP 状态。
 
-- [x] 用户注册
-- [x] 用户登录
-- [x] 获取当前登录用户
-- [x] 退出登录
-- [x] 登录拦截器
-- [x] 会话创建
-- [x] 会话列表查询
-- [x] 会话详情查询
-- [x] 发送消息
-- [x] 查询历史消息
-- [x] user / assistant 消息双落库
-- [x] 接入真实 DeepSeek API
-- [x] 基于最近若干条历史消息实现上下文问答
-- [x] Redis 缓存当前用户会话列表
-- [x] DTO 参数校验
-- [x] 统一错误码
-- [x] 全局异常处理
+## 10. 验证进度
 
----
+主要逻辑已实现并经过静态代码审查，但尚未完成系统性的数据库集成、并发与故障恢复测试。
 
-## 15. 后续优化方向
+测试目录目前只有 Spring 上下文加载测试，不代表业务流程已全部验证。
 
-- [ ] 更细的上下文裁剪策略（按 token / 字符长度）
-- [ ] system prompt
-- [ ] 学习模式（解释 / 面试 / 代码问答）
-- [ ] 自动生成会话标题
-- [ ] 更细的 AI 调用异常分类
-- [ ] token 统计
-- [ ] 流式输出
-- [ ] 更多缓存场景
+重点验证场景：
 
----
+- 正常生成并保存完整问答。
+- 成功请求重复提交，不新增消息或再次调用 AI。
+- AI 失败后问题保留，重试复用问题并增加 attempt。
+- 同一会话的不同请求同时提交，后者返回忙碌。
+- 超时接管后，旧调用不能保存回复或覆盖状态。
+- 回复保存失败时，回复与 SUCCESS 状态一起回滚。
+- A失败、B成功、重试A成功后，历史仍按问答配对展示。
+- 历史超过4轮时，只选最近4轮完整成功问答。
+- Redis故障时聊天结果不被缓存删除异常影响。
 
-## 16. 面试中可重点讲的点
+## 11. 已知限制与待办
 
-1. 为什么设计 `conversation` 和 `message` 两张核心表
-2. 为什么一轮问答要拆成 `user / assistant` 两条消息
-3. 发送消息这条链路怎么走
-4. 为什么要做会话归属校验
-5. 如何接入 DeepSeek API
-6. 为什么上下文只取最近若干条消息
-7. Redis 为什么先缓存会话列表
-8. 为什么创建会话和发送消息后都要删缓存
-9. 统一错误码和全局异常处理如何提升工程化程度
+### 优先修复
 
----
+- 创建会话后的 Redis 缓存删除尚未捕获异常，可能出现数据库已插入、接口却报错。
+- 创建会话接口没有幂等保护，网络重试可能创建重复会话。
+- AI回复未检查 finish_reason，截断内容可能被视为完整成功。
+- 非法JSON、参数类型错误、并发注册用户名冲突等异常分类待完善。
+- AI调用的线程中断处理待完善。
 
-## 17. 总结
+### 后续完善
 
-这个项目最核心的价值，不是“接上了 DeepSeek”，而是：
+- 历史消息和会话列表分页。
+- 按token或字符预算裁剪上下文。
+- 请求状态查询接口与超时任务自动恢复。
+- 缓存失效失败后的补偿机制。
+- AI调用限流、用量统计和更细的错误分类。
+- 流式输出、学习模式、自动会话标题。
+- 核心业务的自动化测试。
 
-**把用户系统、登录鉴权、会话管理、消息存储、真实 AI 调用、上下文历史和 Redis 缓存，真正串成了一条完整的 Java 后端业务链。**
+同一会话限制的是“有效生成任务”。过期后的旧远端调用可能仍在运行，但不能继续写入结果。
 
-对于我来说，它相较于传统后台 CRUD 项目，更能体现我在 AI 场景下做后端系统设计与实现的能力。
+当前允许重试旧失败问题，并按原提问位置展示回复；不会重新生成它后面已经成功的问答，也未实现对话分支。

@@ -3,6 +3,7 @@ package com.example.aiassistant.service.impl;
 import com.example.aiassistant.common.ErrorCode;
 import com.example.aiassistant.constant.RedisKeyConstants;
 import com.example.aiassistant.dto.AiChatMessage;
+import com.example.aiassistant.dto.AiChatTurn;
 import com.example.aiassistant.dto.ChatSendDTO;
 import com.example.aiassistant.entity.Conversation;
 import com.example.aiassistant.entity.Message;
@@ -13,10 +14,16 @@ import com.example.aiassistant.service.AiService;
 import com.example.aiassistant.service.ChatService;
 import com.example.aiassistant.vo.ChatResponseVO;
 import com.example.aiassistant.vo.MessageVO;
-import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
+
+import com.example.aiassistant.dto.StartResult;
+import com.example.aiassistant.entity.ChatRequest;
+import com.example.aiassistant.service.ChatRequestService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 
 
 import java.util.List;
@@ -25,7 +32,8 @@ import java.util.ArrayList;
 @Service
 public class ChatServiceImpl implements ChatService{
 
-    private static final int CONTEXT_LIMIT=10;
+    private static final int CONTEXT_TURN_LIMIT=4;
+    private static final Logger log=LoggerFactory.getLogger(ChatServiceImpl.class);
 
     @Autowired
     private MessageMapper messageMapper;
@@ -39,75 +47,125 @@ public class ChatServiceImpl implements ChatService{
     @Autowired
     private StringRedisTemplate stringRedisTemplate;
 
+    @Autowired
+    private ChatRequestService chatRequestService;
+
     @Override
     public ChatResponseVO sendMessage(Long userId,ChatSendDTO dto){
-        Conversation conversation=conversationMapper.findById(dto.getConversationId());
-        if(conversation==null)
-            throw new BusinessException(ErrorCode.NOT_FOUND,"会话不存在");
+        // 方法返回时，begin的事务已经提交
+        StartResult start=chatRequestService.begin(userId,dto);
 
-        if(!conversation.getUserId().equals(userId))
-            throw new BusinessException(ErrorCode.NO_PERMISSION,"无权访问该会话");
+        if(!start.isShouldGenerate()){
+            ChatResponseVO vo=start.getResponse();
 
-        String content=dto.getContent().trim();
-        if(content==null)
-            throw new BusinessException(ErrorCode.PARAM_ERROR,"消息内容不能为空");
+            // 重复请求可能是在上次成功后、清理缓存前断开的
+            if(ChatRequest.SUCCESS.equals(vo.getStatus())){
+                deleteConversationListCache(userId);
+            }
 
-        Message userMessage=new Message();
-        userMessage.setConversationId(dto.getConversationId());
-        userMessage.setRole("user");
-        userMessage.setContent(content);
-        userMessage.setTokenCount(null);
-        messageMapper.insert(userMessage);
-
-        List<Message>recentMessages=messageMapper.findRecentMessages(dto.getConversationId(),CONTEXT_LIMIT);
-        
-        List<AiChatMessage>aiMessages=new ArrayList<>();
-        for(Message message:recentMessages){
-            aiMessages.add(new AiChatMessage(message.getRole(),message.getContent()));
+            return vo;
         }
 
-        String reply=aiService.generateReply(aiMessages);
+        ChatRequest request=start.getRequest();
+        ChatResponseVO vo;
+        String failureMessage="回复生成失败，请重试";
 
-        Message assistantMessage=new Message();
-        assistantMessage.setConversationId(dto.getConversationId());
-        assistantMessage.setRole("assistant");
-        assistantMessage.setContent(reply);
-        assistantMessage.setTokenCount(null);
-        messageMapper.insert(assistantMessage);
+        try{
+            List<AiChatMessage>aiMessages=buildContext(request);
 
-        conversationMapper.updateLastMessageTime(dto.getConversationId());
+            String reply=aiService.generateReply(aiMessages);
 
-        deleteConversationListCache(userId);
+            failureMessage="回复保存失败，请重试";
 
-        ChatResponseVO vo=new ChatResponseVO();
-        vo.setConversationId(dto.getConversationId());
-        vo.setUserMessage(content);
-        vo.setAssistantMessage(reply);
+            // 独立短事务：保存回复并更新成功状态
+            vo=chatRequestService.complete(
+                    request.getConversationId(),request.getRequestId(),
+                    request.getAttempt(),reply);
+        }catch(RuntimeException e){
+            log.error("处理问答失败，conversationId={},requestId={},attempt={}",
+                    request.getConversationId(),request.getRequestId(),
+                    request.getAttempt(),e);
+
+            // complete抛出异常时，其事务已经结束，再开启失败记录事务
+            vo=recordFailure(request,failureMessage);
+        }
+
+        // 缓存操作放在数据库事务之外
+        if(ChatRequest.SUCCESS.equals(vo.getStatus())){
+            deleteConversationListCache(userId);
+        }
+
         return vo;
     }
 
     @Override
     public List<MessageVO>listMessages(Long userId,Long conversationId){
         Conversation conversation=conversationMapper.findById(conversationId);
-        if(conversation==null)
-            throw new BusinessException(ErrorCode.NOT_FOUND,"会话不存在");
 
-        if(!conversation.getUserId().equals(userId))
-            throw new BusinessException(ErrorCode.NO_PERMISSION,"无权访问该会话");
-
-        List<Message>list=messageMapper.findByConversationId(conversationId);
-        List<MessageVO>result=new ArrayList<>();
-
-        for(Message message:list){
-            MessageVO vo=new MessageVO();
-            BeanUtils.copyProperties(message,vo);
-            result.add(vo);
+        if(conversation==null){
+            throw new BusinessException(ErrorCode.NOT_FOUND,
+                    "会话不存在");
         }
 
-        return result;
+        if(!conversation.getUserId().equals(userId)){
+            throw new BusinessException(ErrorCode.NO_PERMISSION,
+                    "无权访问该会话");
+        }
+
+        return messageMapper.findHistoryByConversationId(conversationId);
+    }
+
+    private List<AiChatMessage>buildContext(ChatRequest request){
+        Message userMessage=messageMapper.findById(
+                request.getUserMessageId());
+
+        if(userMessage==null){
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR,
+                    "请求关联的用户消息不存在");
+        }
+
+        List<AiChatTurn>turns=messageMapper.findRecentSuccessfulTurns(
+                request.getConversationId(),request.getUserMessageId(),
+                CONTEXT_TURN_LIMIT);
+
+        List<AiChatMessage>aiMessages=new ArrayList<>();
+
+        for(AiChatTurn turn:turns){
+            aiMessages.add(new AiChatMessage(
+                    "user",turn.getUserContent()));
+
+            aiMessages.add(new AiChatMessage(
+                    "assistant",turn.getAssistantContent()));
+        }
+
+        aiMessages.add(new AiChatMessage(
+                "user",userMessage.getContent()));
+
+        return aiMessages;
+    }
+
+    private ChatResponseVO recordFailure(ChatRequest request,
+                                         String errorMessage){
+        try{
+            return chatRequestService.fail(
+                    request.getConversationId(),request.getRequestId(),
+                    request.getAttempt(),errorMessage);
+        }catch(RuntimeException e){
+            log.error("记录问答失败状态失败，conversationId={},requestId={},attempt={}",
+                    request.getConversationId(),request.getRequestId(),
+                    request.getAttempt(),e);
+
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR,
+                    "暂时无法确认处理结果，请稍后使用原请求ID重试");
+        }
     }
 
     private void deleteConversationListCache(Long userId){
-        stringRedisTemplate.delete(RedisKeyConstants.CONVERSATION_LIST_KEY_PREFIX+userId);
+        try{
+            stringRedisTemplate.delete(
+                    RedisKeyConstants.CONVERSATION_LIST_KEY_PREFIX+userId);
+        }catch(RuntimeException e){
+            log.warn("删除会话列表缓存失败，userId={}",userId,e);
+        }
     }
 }

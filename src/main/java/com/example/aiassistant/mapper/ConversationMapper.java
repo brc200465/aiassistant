@@ -41,4 +41,12 @@ public interface ConversationMapper {
                     where id=#{id}
                     """)
     int updateLastMessageTime(Long id);
+
+    @Select("""
+        select id,user_id,title,last_message_time,create_time,update_time
+        from conversation
+        where id=#{id}
+        for update
+        """)
+    Conversation lockById(Long id);
 }

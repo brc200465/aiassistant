@@ -6,8 +6,11 @@ import java.time.LocalDateTime;
 
 @Data
 public class MessageVO {
-    private Long Id;
+    private Long id;
     private String role;
     private String content;
     private LocalDateTime createTime;
+    private String requestId;
+    private String status;
+    private String errorMessage;
 }

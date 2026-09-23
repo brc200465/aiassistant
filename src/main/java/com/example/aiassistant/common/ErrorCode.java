@@ -15,4 +15,5 @@ public class ErrorCode {
     //5xxx：系统/第三方调用类错误
     public static final int AI_CALL_ERROR=5001;
     public static final int SYSTEM_ERROR=5002;
+    public static final int CONVERSATION_BUSY=4006;
 }
